@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Cement Plant – WebXR Hands & Mobile</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>body { margin:0; overflow:hidden; background:#111 } canvas { width:100%; height:100% }</style>
+</head>
+<body>
+<canvas id="renderCanvas"></canvas>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+<script src="https://cdn.babylonjs.com/webxr/babylonjs.webxr.js"></script>
+<script>
+const canvas = document.getElementById("renderCanvas");
+const engine = new BABYLON.Engine(canvas, true);
+
+const createScene = async () => {
+  const scene = new BABYLON.Scene(engine);
+  scene.createDefaultCameraOrLights(true, true, true);
+  scene.lights[0].intensity = 0.6;
+
+  // environment
+  const env = scene.createDefaultEnvironment({
+    groundShadowLevel: 0.5, groundYBias: 0.05,
+    skyboxColor: new BABYLON.Color3(0.9, 0.95, 1)
+  });
+
+  // --- IMPORT AI-GENERATED ASSETS ------------------------------------------
+  // Kiln
+  const kiln = await BABYLON.SceneLoader.LoadAssetContainerAsync(
+    "https://your-cdn.com/kiln.glb", "", scene);
+  kiln.addAllToScene();
+  kiln.meshes[0].position.set(0, 0, 0);
+
+  // Pre-heater tower
+  const tower = await BABYLON.SceneLoader.LoadAssetContainerAsync(
+    "https://your-cdn.com/tower.glb", "", scene);
+  tower.addAllToScene();
+  tower.meshes[0].position.set(-20, 0, 10);
+
+  // --- OPTIONAL: click-to-place on mobile ---------------------------------
+  scene.onPointerObservable.add((evt) => {
+    if (evt.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+      const pick = scene.pick(scene.pointerX, scene.pointerY);
+      if (pick.hit) {
+        const clone = kiln.meshes[0].clone("kilnClone");
+        clone.position.copyFrom(pick.pickedPoint);
+      }
+    }
+  });
+
+  // --- WEBXR: hand tracking + pointer fallback ----------------------------
+  const xr = await scene.createDefaultXRExperienceAsync({
+    uiOptions: { sessionMode: "immersive-vr" },
+    handSupportOptions: { handMeshes: true, joints: true },
+    inputOptions: { disableOnlineControllerRepository: false }
+  });
+
+  // Near-interaction so you can grab levers etc.
+  const near = xr.baseExperience.featuresManager.enableFeature(
+    BABYLON.WebXRFeatureName.NEAR_INTERACTION, "latest", {
+      xrInput: xr.input
+    });
+
+  // Make kiln grabbable
+  kiln.meshes.forEach(m => m.isNearGrabbable = true);
+
+  // --- AI-GENERATED AUDIO --------------------------------------------------
+  // Cement-mill hum (AI generated on ElevenLabs or Adobe Firefly)
+  const hum = new BABYLON.Sound("hum",
+    "https://your-cdn.com/cement-hum-loop.mp3", scene,
+    null, { loop: true, autoplay: true, volume: 0.3 });
+
+  return scene;
+};
+
+createScene().then(scene => {
+  engine.runRenderLoop(() => scene.render());
+  window.addEventListener("resize", () => engine.resize());
+});
+</script>
+</body>
+</html>
