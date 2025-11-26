@@ -1,135 +1,148 @@
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Cement Plant WebXR — Babylon.js Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style> html,body,#renderCanvas{ width:100%; height:100%; margin:0; padding:0; overflow:hidden; } </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+  <script>
+    const canvas = document.getElementById("renderCanvas");
+    const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
 
-  <!-- Shared libraries between the application entry point and the components bundle -->
-  <script type="importmap">
-    {
-      "imports": {
-        "@wonderlandengine/api": "./node_modules/@wonderlandengine/api/index.js",
-        "@wonderlandengine/api/decorators.js": "./node_modules/@wonderlandengine/api/index.js"
-      }
-    }
+    const createScene = async () => {
+      const scene = new BABYLON.Scene(engine);
+      scene.clearColor = new BABYLON.Color3(0.9, 0.92, 0.95);
+
+      // Camera & light
+      const camera = new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/3.8, 14, new BABYLON.Vector3(0,1.8,0), scene);
+      camera.attachControl(canvas, true);
+      const hemi = new BABYLON.HemisphericLight("h", new BABYLON.Vector3(0,1,0), scene);
+      hemi.intensity = 0.6;
+      const dir = new BABYLON.DirectionalLight("dir", new BABYLON.Vector3(-0.5, -1, 0), scene);
+      dir.position = new BABYLON.Vector3(10, 10, -10);
+      dir.intensity = 1.1;
+
+      // Ground
+      const ground = BABYLON.MeshBuilder.CreateGround("g", {width:60, height:60}, scene);
+      const groundMat = new BABYLON.StandardMaterial("gm", scene);
+      groundMat.diffuseColor = new BABYLON.Color3(0.25,0.25,0.25);
+      ground.material = groundMat;
+
+      // Kiln (rotary cylinder)
+      const kiln = BABYLON.MeshBuilder.CreateCylinder("kiln", {diameter:2, height:7, tessellation: 24}, scene);
+      kiln.position = new BABYLON.Vector3(-4,1.5,-2);
+      kiln.rotation = new BABYLON.Vector3(0,0.6,0);
+      const kilnMat = new BABYLON.StandardMaterial("km", scene);
+      kilnMat.diffuseColor = new BABYLON.Color3(0.55,0.35,0.28);
+      kiln.material = kilnMat;
+
+      // Silo
+      const silo = BABYLON.MeshBuilder.CreateCylinder("silo", {diameter:4, height:6}, scene);
+      silo.position = new BABYLON.Vector3(0,3,-5);
+      const siloMat = new BABYLON.StandardMaterial("sm", scene);
+      siloMat.diffuseColor = new BABYLON.Color3(0.72,0.72,0.72);
+      silo.material = siloMat;
+
+      // Conveyor
+      const conveyor = BABYLON.MeshBuilder.CreateBox("conv", {width:8, height:0.4, depth:1}, scene);
+      conveyor.position = new BABYLON.Vector3(3,1,-2);
+      conveyor.material = new BABYLON.StandardMaterial("cm", scene);
+      conveyor.material.diffuseColor = new BABYLON.Color3(0.12,0.12,0.12);
+
+      // A couple of "grabbable" meshes (boxes)
+      const makeGrabbable = (name, pos, color) => {
+        const m = BABYLON.MeshBuilder.CreateBox(name, {size:0.7}, scene);
+        m.position = BABYLON.Vector3.FromArray(pos);
+        const mat = new BABYLON.StandardMaterial(name+"m", scene);
+        mat.diffuseColor = color;
+        m.material = mat;
+        m.isPickable = true;
+        m.metadata = {grabbable: true};
+        return m;
+      };
+      makeGrabbable("b1", [-1,1,-2], new BABYLON.Color3(0.4,0.8,0.6));
+      makeGrabbable("b2", [1,1.6,-2], new BABYLON.Color3(1,0.9,0.2));
+
+      // Particle System for smoke (Babylon particle system)
+      const particleSystem = new BABYLON.GPUParticleSystem("smoke", { capacity: 2000 }, scene);
+      particleSystem.particleTexture = new BABYLON.Texture("https://playground.babylonjs.com/textures/flare.png", scene);
+      particleSystem.emitter = new BABYLON.Vector3(0,3,-4); // origin
+      particleSystem.minEmitBox = new BABYLON.Vector3(-4,0,-2);
+      particleSystem.maxEmitBox = new BABYLON.Vector3(4,0,2);
+      particleSystem.minSize = 0.6;
+      particleSystem.maxSize = 2.4;
+      particleSystem.minLifeTime = 2.5;
+      particleSystem.maxLifeTime = 6;
+      particleSystem.emitRate = 80;
+      particleSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+      particleSystem.gravity = new BABYLON.Vector3(0, 0.2, 0);
+      particleSystem.direction1 = new BABYLON.Vector3(-0.5, 1, -0.2);
+      particleSystem.direction2 = new BABYLON.Vector3(0.5, 1, 0.2);
+      particleSystem.start();
+
+      // WebXR experience helper for VR + controllers
+      const xr = await scene.createDefaultXRExperienceAsync({
+        uiOptions: { sessionMode: "immersive-vr" },
+        optionalFeatures: true
+      });
+
+      // Keep a map to hold currently attached meshes for each controller
+      const attached = new Map();
+
+      // When a controller is added, wire up grab/release
+      xr.input.onControllerAddedObservable.add((xrController) => {
+        const controller = xrController;
+        // ray for picking
+        const pickRay = new BABYLON.Ray();
+        controller.onMotionControllerInitObservable.add(() => {
+          // When trigger changes: select start on squeeze or trigger press
+          controller.onControllerAddedObservable = controller.onControllerAddedObservable || new BABYLON.Observable();
+        });
+
+        // handle selection (trigger press)
+        controller.onMotionControllerInitObservable.add((motionController) => {
+          const xrComponent = motionController.getComponent("xr-standard-trigger");
+          if (!xrComponent) return;
+          xrComponent.onButtonStateChangedObservable.add(() => {
+            const pressed = xrComponent.changes.pressed;
+            if (pressed) {
+              // select start - perform a pick in front of controller
+              const pickResult = scene.pickWithRay(controller.getForwardRay());
+              if (pickResult && pickResult.hit && pickResult.pickedMesh && pickResult.pickedMesh.metadata && pickResult.pickedMesh.metadata.grabbable) {
+                const picked = pickResult.pickedMesh;
+                // parent the mesh to controller's grip
+                const grip = controller.grip || controller.pointer; // fallback
+                picked._prevParent = picked.parent;
+                picked.setParent(grip);
+                attached.set(controller.uniqueId, picked);
+              }
+            } else {
+              // release
+              const previously = attached.get(controller.uniqueId);
+              if (previously) {
+                previously.setParent(previously._prevParent || null);
+                attached.delete(controller.uniqueId);
+              }
+            }
+          });
+        });
+      });
+
+      return scene;
+    };
+
+    createScene().then(scene => {
+      engine.runRenderLoop(() => {
+        scene.render();
+      });
+    });
+
+    window.addEventListener("resize", () => engine.resize());
   </script>
-
-  <head>
-    
-    
-    <link rel="modulepreload" href="MyWonderland2-bundle.js?t=2025-11-25T12:47:26.929" as="script">
-    
-    
-    <link rel="modulepreload" href="MyWonderland2-app.js?t=2025-11-25T12:47:26.929" as="script">
-    <title>MyWonderland2</title>
-    <meta charset="utf-8" />
-
-    <meta property="og:title" content="MyWonderland2" />
-    <meta property="og:type" content="website" />
-    <meta property="og:description" content="Wonderland Engine based project." />
-    
-
-    <meta name="twitter:description" content="Wonderland Engine based project." />
-    <meta name="twitter:title" content="MyWonderland2" />
-    <meta name="twitter:card" content="summary_large_image" />
-    
-
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="white">
-    <style>
-    html {
-        height: 100%;
-    }
-    body {
-        height: 100%;
-        margin: 0px;
-        background-image: linear-gradient(black, #2b2b2b);
-    }
-    .xr-button-container {
-      display: block;
-      position: fixed;
-      width: 100%;
-      bottom: 0px;
-      display: flex;
-      justify-content: center;
-      pointer-events: none;
-    }
-
-    .button {
-      float: left;
-      width: 0px; /* Hidden until we know supported state */
-      padding-left: 10px;
-      padding-bottom: 25px;
-      display: block;
-      pointer-events: all;
-      cursor: pointer;
-      opacity: 0.25;
-    }
-    .button[data-supported] {
-      width: 100px !important;
-      transition: 0.5s;
-    }
-    .button[data-supported='true'] {
-      opacity: 1.0;
-    }
-
-    #canvas {
-      -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      -khtml-user-select: none;
-      -moz-user-select: none;
-      -ms-user-select: none;
-      -webkit-tap-highlight-color: transparent;
-      user-select: none;
-      touch-action: none;
-    }
-
-    .xr-button-label {
-      fill: white;
-    }
-
-    .xr-button-frame {
-      stroke: white;
-    }
-
-    #version {
-      text-align: right;
-      position: absolute;
-      right: 10px;
-      bottom: 10px;
-      color: white;
-      font-size: 18pt;
-      font-family: monospace;
-      /*display: none; */
-      z-index: 99999;
-    }
-
-    #version a {
-      transition: opacity 0.5s;
-      opacity: 0;
-    }
-
-    #version:hover a{
-      opacity: 1;
-    }
-
-    </style>
-
-    
-
-    <script type="module" src="MyWonderland2-app.js?t=2025-11-25T12:47:26.929"></script>
-
-    
-    </script>
-    
-  </head>
-  <body>
-    <canvas id="canvas" style="width: 100%; height: 100%; display: block;" tabindex="0"></canvas>
-    <div id="version">
-        <a>Wonderland Engine 1.4.7</a>
-    </div>
-    <div class="xr-button-container">
-      <a id="vr-button" class="button">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109.41 65"><rect class="xr-button-frame" x="3.5" y="3.5" width="102.41" height="58" rx="16.68" style="fill:none;stroke-linejoin:round;stroke-width:7px"/><path class="xr-button-label" d="M36.24,48.84a2,2,0,0,1-1.78-1.15L23.39,17.46a1.84,1.84,0,0,1,1.78-1.84h5.45a1.8,1.8,0,0,1,1.66,1.21l7.29,20.42,7.28-20.42a1.8,1.8,0,0,1,1.67-1.21H54a1.84,1.84,0,0,1,1.78,1.84L44.67,47.69a2,2,0,0,1-1.78,1.15Z"/><path class="xr-button-label" d="M70.61,40H68v7a1.84,1.84,0,0,1-1.78,1.84H61.31A1.83,1.83,0,0,1,59.54,47V17.46a1.83,1.83,0,0,1,1.77-1.84H73s13,.12,13,12.22c0,6-3.21,9-6.42,10.5L86.38,47a1.76,1.76,0,0,1-1.77,1.84h-5.8a1.91,1.91,0,0,1-1.43-.69ZM68,32.09h5c2.24,0,4.08-1.15,4.08-4.25s-1.84-4.36-4.08-4.36H68Z"/></svg>
-      </a>
-      
-    </div>
-  </body>
+</body>
 </html>
